@@ -1,0 +1,231 @@
+///main module fir booth cska
+`timescale 1ns/1ps
+
+module fir_filter_booth_cska #(
+    parameter N = 16, 
+    parameter N_TAPS = 8
+)(
+    input clk,
+    input rst,
+    input signed [N-1:0] x_in,
+    output signed [2*N-1:0] y_out
+);
+
+ 
+    reg signed [N-1:0] coeffs [0:N_TAPS-1];
+    initial begin
+        coeffs[0] = 16'sd1;
+        coeffs[1] = 16'sd2;
+        coeffs[2] = 16'sd3;
+        coeffs[3] = 16'sd4;
+        coeffs[4] = 16'sd3;
+        coeffs[5] = 16'sd2;
+        coeffs[6] = 16'sd1;
+        coeffs[7] = 16'sd0;
+    end
+
+  
+    reg signed [N-1:0] shift_reg [0:N_TAPS-1];
+    integer i;
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            for (i = 0; i < N_TAPS; i = i + 1)
+                shift_reg[i] <= 0;
+        end else begin
+            for (i = N_TAPS-1; i > 0; i = i - 1)
+                shift_reg[i] <= shift_reg[i-1];
+            shift_reg[0] <= x_in;
+        end
+    end
+
+    // ---------------------------
+    // Booth Multipliers
+    // ---------------------------
+    wire signed [2*N-1:0] products [0:N_TAPS-1];
+    genvar j;
+    generate
+        for (j = 0; j < N_TAPS; j = j + 1) begin : mult_stage
+            radix8_booth_multiplier #(.N(N)) booth_mul (
+                .multiplicand(shift_reg[j]),
+                .multiplier(coeffs[j]),
+                .product(products[j])
+            );
+        end
+    endgenerate
+
+ 
+    wire signed [2*N-1:0] sum_stage [0:N_TAPS];
+    assign sum_stage[0] = {2*N{1'b0}};
+
+    generate
+        for (genvar k = 0; k < N_TAPS; k = k + 1) begin : add_stage
+            cska_top #(.N(2*N), .BLOCK_SIZE(4)) cska_add (
+                .A(sum_stage[k]),
+                .B(products[k]),
+                .Cin(1'b0),
+                .Sum(sum_stage[k+1]),
+                .Cout() 
+            );
+        end
+    endgenerate
+
+    assign y_out = sum_stage[N_TAPS];
+
+endmodule
+/////// cska adder 
+module cska_top #(parameter N = 16, BLOCK_SIZE = 4)(
+    input  [N-1:0] A,
+    input  [N-1:0] B,
+    input          Cin,
+    output [N-1:0] Sum,
+    output         Cout
+);
+    localparam BLOCKS = N / BLOCK_SIZE;
+  
+    wire [BLOCKS:0] carry;
+    wire [BLOCKS-1:0] propagate;
+    assign carry[0] = Cin;
+
+    genvar i;
+    generate
+        for (i = 0; i < BLOCKS; i = i + 1) begin : cska_block
+            wire [BLOCK_SIZE-1:0] sum_temp;
+            wire block_carry, block_p;
+
+            cla_block #(.WIDTH(BLOCK_SIZE)) cla_inst (
+                .A       (A[i*BLOCK_SIZE +: BLOCK_SIZE]),
+                .B       (B[i*BLOCK_SIZE +: BLOCK_SIZE]),
+                .Cin     (carry[i]),
+                .Sum     (sum_temp),
+                .Cout    (block_carry),
+                .P_block (block_p)
+            );
+
+            assign Sum[i*BLOCK_SIZE +: BLOCK_SIZE] = sum_temp;
+            assign propagate[i] = block_p;
+            assign carry[i+1] = block_p ? carry[i] : block_carry;
+        end
+    endgenerate
+
+    assign Cout = carry[BLOCKS];
+endmodule
+
+module cla_block #(parameter WIDTH = 4)(
+  input  [WIDTH-1:0] A, B,
+  input              Cin,
+  output [WIDTH-1:0] Sum,
+  output             Cout,
+  output             P_block   // Propagate block signal
+);
+  wire [WIDTH-1:0] P, G, C;
+  
+  assign P = A ^ B;
+  assign G = A & B;
+  
+  assign C[0] = Cin;
+  
+  genvar i;
+  generate
+    for (i = 1; i < WIDTH; i = i + 1) begin
+      assign C[i] = G[i-1] | (P[i-1] & C[i-1]);
+    end
+  endgenerate
+  
+  assign Sum = P ^ C;
+  assign Cout = G[WIDTH-1] | (P[WIDTH-1] & C[WIDTH-1-1]);
+  assign P_block = &P;  
+  
+endmodule
+//////radix8 booth multiplier
+`timescale 1ns/1ps
+module radix8_booth_multiplier #(parameter N = 16)(
+    input  signed [N-1:0] multiplicand,
+    input  signed [N-1:0] multiplier,
+    output signed [2*N-1:0] product
+);
+
+    localparam G = (N + 2) / 3;
+
+    wire [N:0] y_ext;
+    assign y_ext = {multiplier[N-1], multiplier};
+
+    wire signed [2*N-1:0] partial_products [0:G-1];
+
+    genvar i;
+    generate
+        for (i = 0; i < G; i = i + 1) begin : booth_block
+            // Directly extract 4 bits from y_ext for Booth encoding
+            wire [3:0] y_segment;
+            assign y_segment[0] = (3*i == 0) ? 1'b0 : y_ext[3*i-1];
+            assign y_segment[1] = y_ext[3*i];
+            assign y_segment[2] = (3*i+1 > N) ? y_ext[N] : y_ext[3*i+1];
+            assign y_segment[3] = (3*i+2 > N) ? y_ext[N] : y_ext[3*i+2];
+
+            reg signed [2*N-1:0] booth_out;
+
+            always @(*) begin
+                case (y_segment)
+                    4'b0000, 4'b1111: booth_out = 0;
+                    4'b0001, 4'b0010: booth_out = multiplicand;
+                    4'b0011, 4'b0100: booth_out = multiplicand <<< 1;
+                    4'b0101, 4'b0110: booth_out = multiplicand + (multiplicand <<< 1);
+                    4'b0111:          booth_out = multiplicand <<< 2;
+                    4'b1000:          booth_out = -(multiplicand <<< 2);
+                    4'b1001, 4'b1010: booth_out = -(multiplicand + (multiplicand <<< 1));
+                    4'b1011, 4'b1100: booth_out = -(multiplicand <<< 1);
+                    4'b1101, 4'b1110: booth_out = -multiplicand;
+                    default:          booth_out = 0;
+                endcase
+            end
+
+            assign partial_products[i] = booth_out <<< (3*i);
+        end
+    endgenerate
+
+    reg signed [2*N-1:0] final_sum;
+    integer k;
+    always @(*) begin
+        final_sum = 0;
+        for (k = 0; k < G; k = k + 1)
+            final_sum = final_sum + partial_products[k];
+    end
+
+    assign product = final_sum;
+
+endmodule
+/////fir_tb for digital
+`timescale 1ns/1ps
+
+module tb_fir;
+    reg clk, rst;
+    reg signed [15:0] x_in;
+    wire signed [31:0] y_out;
+
+    // Instantiate FIR filter
+    fir_filter_booth_cska uut (
+        .clk(clk),
+        .rst(rst),
+        .x_in(x_in),
+        .y_out(y_out)
+    );
+
+    // Clock generation: 100 MHz (10 ns period)
+    initial clk = 0;
+    always #5 clk = ~clk;
+
+    // Stimulus
+    initial begin
+        $monitor("t=%0dns, x_in=%d, y_out=%d", $time, x_in, y_out);
+
+        rst = 1; x_in = 0;
+        #10 rst = 0;
+
+        #10 x_in = 16'sd1;
+        #10 x_in = 16'sd2;
+        #10 x_in = 16'sd3;
+        #10 x_in = 16'sd4;
+        #10 x_in = 16'sd0;
+        #100 $finish;
+    end
+endmodule
+
