@@ -1,4 +1,4 @@
-FIR Filter with Booth Multiplier and CSKA Adder
+FIR Filter with Booth Multiplier radix 8 and CSKA Adder
 
 Project Overview
 This project implements a Finite Impulse Response (FIR) filter in Verilog. The design uses Radix-8 Booth multipliers for coefficient multiplication and Carry Skip Adders (CSKA) for adding the partial products. The goal is to create an efficient, modular, and scalable FIR filter.
