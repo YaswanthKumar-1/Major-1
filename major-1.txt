@@ -8,10 +8,12 @@ module fir_filter_booth_cska #(
     input clk,
     input rst,
     input signed [N-1:0] x_in,
-    output signed [2*N-1:0] y_out
+    output reg signed [2*N-1:0] y_out
 );
 
- 
+    // ---------------------------
+    // Coefficients
+    // ---------------------------
     reg signed [N-1:0] coeffs [0:N_TAPS-1];
     initial begin
         coeffs[0] = 16'sd1;
@@ -24,7 +26,9 @@ module fir_filter_booth_cska #(
         coeffs[7] = 16'sd0;
     end
 
-  
+    // ---------------------------
+    // Shift Register for Inputs
+    // ---------------------------
     reg signed [N-1:0] shift_reg [0:N_TAPS-1];
     integer i;
     always @(posedge clk or posedge rst) begin
@@ -53,9 +57,11 @@ module fir_filter_booth_cska #(
         end
     endgenerate
 
- 
+    // ---------------------------
+    // CSKA Adder Chain
+    // ---------------------------
     wire signed [2*N-1:0] sum_stage [0:N_TAPS];
-    assign sum_stage[0] = {2*N{1'b0}};
+    assign sum_stage[0] = {2*N{1'b0}};  // zero init
 
     generate
         for (genvar k = 0; k < N_TAPS; k = k + 1) begin : add_stage
@@ -64,16 +70,27 @@ module fir_filter_booth_cska #(
                 .B(products[k]),
                 .Cin(1'b0),
                 .Sum(sum_stage[k+1]),
-                .Cout() 
+                .Cout()
             );
         end
     endgenerate
 
-    assign y_out = sum_stage[N_TAPS];
+    // ---------------------------
+    // Register the final output
+    // ---------------------------
+    always @(posedge clk or posedge rst) begin
+        if (rst)
+            y_out <= 0;
+        else
+            y_out <= sum_stage[N_TAPS];
+    end
+
+endmodule
+
 
 endmodule
 /////// cska adder 
-module cska_top #(parameter N = 16, BLOCK_SIZE = 4)(
+module cska_top #(parameter N = 32, BLOCK_SIZE = 4)(
     input  [N-1:0] A,
     input  [N-1:0] B,
     input          Cin,
@@ -228,4 +245,5 @@ module tb_fir;
         #100 $finish;
     end
 endmodule
+
 
