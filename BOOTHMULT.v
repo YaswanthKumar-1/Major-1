@@ -8,7 +8,8 @@ module radix8_booth_multiplier #(parameter N = 16)(
     localparam G = (N + 2) / 3;
 
     wire [N:0] y_ext;
-    assign y_ext = {multiplier[N-1], multiplier};
+    assign y_ext = {multiplier[N-1], multiplier};/////here if we use 1`b0 next to the multiplier then 
+    // here the booth doesnt sign extended and schematic error for wrong port declaration
 
     wire signed [2*N-1:0] partial_products [0:G-1];
 
@@ -17,7 +18,7 @@ module radix8_booth_multiplier #(parameter N = 16)(
         for (i = 0; i < G; i = i + 1) begin : booth_block
             // Directly extract 4 bits from y_ext for Booth encoding
             wire [3:0] y_segment;
-            assign y_segment[0] = (3*i == 0) ? 1'b0 : y_ext[3*i-1];
+            assign y_segment[0] = (3*i == 0) ? 1'b0 : y_ext[3*i-1];//here overlapping is used here
             assign y_segment[1] = y_ext[3*i];
             assign y_segment[2] = (3*i+1 > N) ? y_ext[N] : y_ext[3*i+1];
             assign y_segment[3] = (3*i+2 > N) ? y_ext[N] : y_ext[3*i+2];
